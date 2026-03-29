@@ -1,0 +1,163 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## SOCRadar Entra ID — Identity Intelligence Dashboard\nEmployee credentials from SOCRadar Identity Intelligence (pay-per-use), enriched with Microsoft Entra ID lookup and remediation actions."
+      },
+      "name": "header"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n### Overview"
+      },
+      "name": "overview-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| count\n| project Count",
+        "size": 4,
+        "title": "Total Records",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Count", "formatter": 12, "formatOptions": { "palette": "auto" } },
+          "showBorder": false
+        }
+      },
+      "customWidth": "25",
+      "name": "total-records"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| where entra_status_s == \"found\"\n| count\n| project Count",
+        "size": 4,
+        "title": "Found in Entra ID",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Count", "formatter": 12, "formatOptions": { "palette": "redBright" } },
+          "showBorder": false
+        }
+      },
+      "customWidth": "25",
+      "name": "found-entra"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| where password_present_b == true\n| count\n| project Count",
+        "size": 4,
+        "title": "With Password",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Count", "formatter": 12, "formatOptions": { "palette": "orange" } },
+          "showBorder": false
+        }
+      },
+      "customWidth": "25",
+      "name": "with-password"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| where TimeGenerated > ago(24h)\n| count\n| project Count",
+        "size": 4,
+        "title": "Last 24 Hours",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "Count", "formatter": 12, "formatOptions": { "palette": "blue" } },
+          "showBorder": false
+        }
+      },
+      "customWidth": "25",
+      "name": "last-24h"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n### Analysis"
+      },
+      "name": "analysis-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| summarize Count=count() by entra_status_s\n| order by Count desc",
+        "size": 2,
+        "title": "Entra ID Status",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "customWidth": "50",
+      "name": "entra-status-pie"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| summarize Count=count() by country_s\n| order by Count desc\n| take 10",
+        "size": 2,
+        "title": "Top Countries",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart"
+      },
+      "customWidth": "50",
+      "name": "top-countries"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| summarize Count=count() by bin(TimeGenerated, 1d)\n| order by TimeGenerated asc",
+        "size": 0,
+        "title": "Records Over Time",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "records-timeline"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n### Recent Records"
+      },
+      "name": "recent-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SOCRadar_Identity_CL\n| project TimeGenerated, email_s, entra_status_s, password_present_b, password_masked_s, country_s, source_type_s, actions_taken_s\n| order by TimeGenerated desc\n| take 50",
+        "size": 0,
+        "title": "Recent Identity Records",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "recent-records"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "/subscriptions/{Subscription}/resourceGroups/{ResourceGroup}/providers/Microsoft.OperationalInsights/workspaces/{Workspace}"
+  ]
+}
