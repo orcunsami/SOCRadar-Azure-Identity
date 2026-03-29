@@ -59,6 +59,7 @@ def load() -> dict:
         "workspace_key": _get("WORKSPACE_KEY", required=True),
 
         # Sentinel (optional, only if create_incident=true)
+        "subscription_id":          _get("SUBSCRIPTION_ID", default=""),
         "workspace_name":           _get("WORKSPACE_NAME", default=""),
         "workspace_location":       _get("WORKSPACE_LOCATION", default=""),
         "workspace_resource_group": _get("WORKSPACE_RESOURCE_GROUP", default=""),

@@ -349,8 +349,16 @@
                             "value": "[parameters('WorkspaceName')]"
                         },
                         {
+                            "name": "WORKSPACE_LOCATION",
+                            "value": "[parameters('WorkspaceLocation')]"
+                        },
+                        {
                             "name": "WORKSPACE_RESOURCE_GROUP",
                             "value": "[if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup'))]"
+                        },
+                        {
+                            "name": "SUBSCRIPTION_ID",
+                            "value": "[subscription().subscriptionId]"
                         },
                         {
                             "name": "STORAGE_ACCOUNT_NAME",
