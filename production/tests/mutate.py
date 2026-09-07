@@ -42,6 +42,33 @@ MUTATIONS = [
  ("failed run's evidence expires in an hour", 'azuredeploy.json',
   '"retentionInterval": "PT26H"', '"retentionInterval": "PT1H"',
   'tests/test_package_push.py'),
+
+ # EXP-AZURE-0198: a wrong workspace must stop the deployment before anything
+ # is created. Measured live in rg-id-base-27c9 on 7 Sep 2026: four orphans.
+ ('guard evaluated in the parent', 'azuredeploy.json',
+  '"scope": "inner"', '"scope": "outer"',
+  'tests/test_workspace_guard.py'),
+ ('guard resolves nothing', 'azuredeploy.json',
+  "[reference(parameters('WorkspaceResourceId'), '2023-09-01', 'Full').properties.customerId]",
+  "[parameters('WorkspaceResourceId')]",
+  'tests/test_workspace_guard.py'),
+ ('onboarding guard reads the workspace instead', 'azuredeploy.json',
+  "/providers/Microsoft.SecurityInsights/onboardingStates/default", "",
+  'tests/test_workspace_guard.py'),
+ ('onboarding guard always runs', 'azuredeploy.json',
+  '"condition": "[parameters(\'EnableCreateIncident\')]",', '',
+  'tests/test_workspace_guard.py'),
+ ('first resource stops waiting for the guard', 'azuredeploy.json',
+  '''            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ]''',
+  '''            "dependsOn": []''',
+  'tests/test_workspace_guard.py'),
+ ('workspace id blind to the workspace resource group', 'azuredeploy.json',
+  "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+  "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+  'tests/test_workspace_guard.py'),
 ]
 blind = []
 for name, path, old, new, test in MUTATIONS:

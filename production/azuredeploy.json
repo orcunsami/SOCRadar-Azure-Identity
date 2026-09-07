@@ -164,10 +164,75 @@
         "appInsightsName": "[concat('socradar-identity-ai-', uniqueString(resourceGroup().id))]",
         "StorageTableDataContributorRoleId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
         "WebsiteContributorRoleId": "de139f84-1756-47ae-9be6-808fbbe84772",
-        "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+        "workspaceResourceId": "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
         "pollingSchedule": "[concat('0 0 */', string(parameters('PollingIntervalHours')), ' * * *')]"
     },
     "resources": [
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "precheck-workspace-exists",
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "inner"
+                },
+                "parameters": {
+                    "WorkspaceResourceId": {
+                        "value": "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]"
+                    }
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "WorkspaceResourceId": {
+                            "type": "string"
+                        }
+                    },
+                    "resources": [],
+                    "outputs": {
+                        "workspaceId": {
+                            "type": "string",
+                            "value": "[reference(parameters('WorkspaceResourceId'), '2023-09-01', 'Full').properties.customerId]"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "precheck-sentinel-onboarded",
+            "condition": "[parameters('EnableCreateIncident')]",
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "inner"
+                },
+                "parameters": {
+                    "WorkspaceResourceId": {
+                        "value": "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]"
+                    }
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "WorkspaceResourceId": {
+                            "type": "string"
+                        }
+                    },
+                    "resources": [],
+                    "outputs": {
+                        "onboardingStateId": {
+                            "type": "string",
+                            "value": "[reference(concat(parameters('WorkspaceResourceId'), '/providers/Microsoft.SecurityInsights/onboardingStates/default'), '2023-02-01', 'Full').id]"
+                        }
+                    }
+                }
+            }
+        },
         {
             "type": "Microsoft.Storage/storageAccounts",
             "apiVersion": "2023-05-01",
@@ -180,14 +245,20 @@
             "properties": {
                 "supportsHttpsTrafficOnly": true,
                 "minimumTlsVersion": "TLS1_2"
-            }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ]
         },
         {
             "type": "Microsoft.Storage/storageAccounts/tableServices",
             "apiVersion": "2023-05-01",
             "name": "[concat(variables('storageAccountName'), '/default')]",
             "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ]
         },
         {
@@ -195,14 +266,20 @@
             "apiVersion": "2023-05-01",
             "name": "[concat(variables('storageAccountName'), '/default/', variables('tableName'))]",
             "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', variables('storageAccountName'), 'default')]"
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', variables('storageAccountName'), 'default')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ]
         },
         {
             "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
             "apiVersion": "2023-01-31",
             "name": "[variables('managedIdentityName')]",
-            "location": "[resourceGroup().location]"
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ]
         },
         {
             "type": "Microsoft.Web/serverfarms",
@@ -216,7 +293,11 @@
             "kind": "functionapp",
             "properties": {
                 "reserved": true
-            }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ]
         },
         {
             "type": "Microsoft.Insights/components",
@@ -227,7 +308,11 @@
             "properties": {
                 "Application_Type": "web",
                 "RetentionInDays": 30
-            }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ]
         },
         {
             "type": "Microsoft.Web/sites",
@@ -246,7 +331,9 @@
                 "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
                 "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', variables('storageAccountName'), 'default', variables('tableName'))]",
-                "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+                "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ],
             "properties": {
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
@@ -393,7 +480,9 @@
             "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
             "dependsOn": [
                 "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
-                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ],
             "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('StorageTableDataContributorRoleId'))]",
@@ -408,7 +497,9 @@
             "scope": "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
             "dependsOn": [
                 "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
-                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ],
             "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('WebsiteContributorRoleId'))]",
@@ -430,7 +521,9 @@
             },
             "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-                "[guid(resourceId('Microsoft.Web/sites', variables('functionAppName')), variables('managedIdentityName'), variables('WebsiteContributorRoleId'))]"
+                "[guid(resourceId('Microsoft.Web/sites', variables('functionAppName')), variables('managedIdentityName'), variables('WebsiteContributorRoleId'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
             ],
             "properties": {
                 "azCliVersion": "2.50.0",

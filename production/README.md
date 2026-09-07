@@ -12,12 +12,44 @@ Pulls leaked employee credentials from SOCRadar Identity Intelligence API and ta
 |-----------|-------------|
 | SocradarIdentityApiKey | SOCRadar Identity Intelligence API key (pay-per-use, separate from Platform key) |
 | MonitoredDomains | Comma-separated domains to monitor (e.g., `contoso.com,fabrikam.com`) |
-| WorkspaceName | Microsoft Sentinel Log Analytics Workspace name |
-| WorkspaceId | Workspace ID (from Agents management) |
-| WorkspaceKey | Workspace primary key |
+| WorkspaceName | Microsoft Sentinel Log Analytics Workspace name. It must already exist -- see below |
 | EntraIdTenantId | Microsoft Entra ID tenant ID |
 | EntraIdClientId | App Registration client ID |
 | EntraIdClientSecret | App Registration client secret |
+
+The workspace ID and its shared key used to be asked for here. They are not
+parameters: the template reads both from the workspace you name.
+
+### Optional Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| WorkspaceResourceGroup | (deployment RG) | Set it when the workspace lives in another resource group |
+| EnableCreateIncident | false | Create Microsoft Sentinel incidents for compromised accounts. Requires Microsoft Sentinel on the workspace |
+
+### The workspace has to exist before you deploy
+
+This template does not create a Log Analytics workspace and does not onboard
+Microsoft Sentinel. A wrong `WorkspaceName` fails the deployment in its first
+step, `precheck-workspace-exists`, and creates nothing. It used to create the
+storage account, the App Service Plan, Application Insights and the identity
+before failing.
+
+With `EnableCreateIncident` on, a second step checks that Microsoft Sentinel is
+actually onboarded on that workspace. Without that check the deployment went
+green and incident creation failed later, at runtime.
+
+### A failed Failure-Anomalies deployment is Azure's, not ours
+
+After a successful install the resource group's deployment history may show a
+failed `Failure-Anomalies-Alert-Rule-Deployment`. Azure creates that smart
+detection rule by itself when Application Insights is created, and it fails
+with `MissingSubscriptionRegistration` when `Microsoft.AlertsManagement` is not
+registered in the subscription. The integration is unaffected. To make it stop:
+
+```bash
+az provider register --namespace Microsoft.AlertsManagement
+```
 
 ## Post-Deployment
 
