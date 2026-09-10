@@ -58,13 +58,10 @@ fi
 LOCATION="${TEST_LOCATION:-westeurope}"
 KEEP="${KEEP_RESOURCES:-false}"
 
-# The template's own PackageUri default is a 404: this product has no releases
-# at all, so the package the deploymentScript downloads was never published and
-# every path that should succeed fails with "package URL returned HTTP 404".
-# That is a real defect, recorded in task_azure_0061, and it is not what these
-# paths are about. TEST_PACKAGE_URI substitutes a known-good carrier so the
-# deployment paths can be measured while it is open. Put the known-good thing
-# in the suspect carrier and the hypothesis dies in one move.
+# TEST_PACKAGE_URI substitutes another package for the template's PackageUri
+# default, e.g. a build staged in a blob before it is published. Leave it empty
+# to run the paths exactly as a customer does, against the published release.
+# (Until 10 Sep 2026 the default was a 404: the product had no release at all.)
 PACKAGE_URI="${TEST_PACKAGE_URI:-}"
 
 SFX=$(python3 -c "import uuid;print(uuid.uuid4().hex[:4])")
