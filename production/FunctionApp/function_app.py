@@ -100,6 +100,17 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
     # Extract checkpoint before the loop
     new_checkpoint = employees[-1].get("_checkpoint_update", {}) if employees else {}
 
+    # The source could not finish reading SOCRadar. "0 records, 0 errors" would be a lie:
+    # count it, and do not move the checkpoint over a window nobody read (EXP-AZURE-0214).
+    fetch_failed = any(e.get("_fetch_failed") for e in employees)
+    employees = [e for e in employees if not e.get("_empty_marker")]
+    for e in employees:
+        e.pop("_fetch_failed", None)
+    if fetch_failed:
+        logger.error("[IDENTITY] SOCRadar fetch did not finish — counted as an error, checkpoint held")
+        errors += 1
+        new_checkpoint = {}
+
     for emp in employees:
         try:
             email = emp.get("email") or emp.get("user", "")

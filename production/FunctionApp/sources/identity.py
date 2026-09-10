@@ -53,9 +53,10 @@ def fetch(conf: dict, checkpoint: dict) -> list:
     final_checkpoint_date = shared_checkpoint_date
 
     all_records = []
+    fetch_failed = False
 
     for domain in domains:
-        domain_records, last_checkpoint_date, _ = _fetch_domain(
+        domain_records, last_checkpoint_date, _, domain_failed = _fetch_domain(
             api_key=api_key,
             domain=domain,
             log_start_date=shared_checkpoint_date,
@@ -64,6 +65,7 @@ def fetch(conf: dict, checkpoint: dict) -> list:
             enable_log_plaintext=enable_log_plaintext,
         )
         all_records.extend(domain_records)
+        fetch_failed = fetch_failed or domain_failed
         if last_checkpoint_date:
             final_checkpoint_date = last_checkpoint_date
 
@@ -82,6 +84,13 @@ def fetch(conf: dict, checkpoint: dict) -> list:
             }
         })
 
+    # A domain that stopped on an HTTP error, a transport error or is_success=false must not
+    # read as "no records": the caller counts it under errors (EXP-AZURE-0214).
+    if fetch_failed:
+        if not all_records:
+            all_records.append({"_empty_marker": True})
+        all_records[-1]["_fetch_failed"] = True
+
     return all_records
 
 
@@ -92,6 +101,7 @@ def _fetch_domain(api_key: str, domain: str, log_start_date: str, log_end_date: 
     new_offset = offset
     domain_records = []
     page = 0
+    fetch_failed = False
 
     logger.info(f"[IDENTITY] domain={domain} log_start_date={log_start_date!r} log_end_date={log_end_date!r} offset={offset}")
 
@@ -109,15 +119,18 @@ def _fetch_domain(api_key: str, domain: str, log_start_date: str, log_end_date: 
             resp = requests.get(BASE_URL, headers=headers, params=params, timeout=30)
         except requests.RequestException as e:
             logger.error(f"[IDENTITY] domain={domain} request failed: {e}")
+            fetch_failed = True
             break
 
         if resp.status_code != 200:
             logger.error(f"[IDENTITY] domain={domain} API error {resp.status_code}: {resp.text[:200]}")
+            fetch_failed = True
             break
 
         body = resp.json()
         if not body.get("is_success"):
             logger.error(f"[IDENTITY] domain={domain} is_success=false: {body.get('message', 'unknown')}")
+            fetch_failed = True
             break
 
         payload = body.get("data", {})
@@ -160,4 +173,4 @@ def _fetch_domain(api_key: str, domain: str, log_start_date: str, log_end_date: 
 
         time.sleep(1)
 
-    return domain_records, new_checkpoint_date, new_offset
+    return domain_records, new_checkpoint_date, new_offset, fetch_failed
