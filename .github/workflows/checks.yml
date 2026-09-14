@@ -1,0 +1,62 @@
+name: Checks
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every tracked JSON parses
+        run: |
+          set -e
+          count=0
+          while IFS= read -r f; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f"
+            echo "  ok: $f"
+            count=$((count + 1))
+          done < <(git ls-files '*.json')
+          echo "checked $count file(s)"
+          # A glob that matches nothing would otherwise pass silently.
+          if [ "$count" -lt 3 ]; then
+            echo "expected at least 3 JSON file(s), found $count"
+            exit 1
+          fi
+        shell: bash
+
+      # test_fetch_failed.py imports function_app, which imports azure.functions.
+      - name: Install the Function App dependencies
+        run: pip install --quiet -r production/FunctionApp/requirements.txt
+
+      - name: A fetch that does not finish is not reported as zero errors
+        run: python3 production/tests/test_fetch_failed.py
+
+      - name: Package is pushed by zip deploy and re-pushed on redeploy
+        run: python3 production/tests/test_package_push.py
+
+      - name: Both prechecks resolve the workspace before anything is created
+        run: python3 production/tests/test_workspace_guard.py
+
+      - name: No secrets in tracked files
+        run: |
+          set -e
+          # Calibrate first: a scan that cannot see a planted probe proves nothing.
+          # The probe strings are assembled at run time so this file does not trip its own scan.
+          printf 'api_key = "sk-%s"\nAKIA%s\n' "CALIBRATION0123456789012" "0000CALIBRATION1" > .calibration-probe
+          if ! grep -rIE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}' . --exclude-dir=.git >/dev/null; then
+            echo "scan is blind - it cannot see the calibration probe"
+            rm -f .calibration-probe
+            exit 1
+          fi
+          rm -f .calibration-probe
+          echo "  calibration ok"
+          if grep -rIE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----' . --exclude-dir=.git; then
+            echo "secret pattern found in tracked content"
+            exit 1
+          fi
+          echo "  no secret patterns"
