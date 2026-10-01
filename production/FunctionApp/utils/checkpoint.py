@@ -1,13 +1,12 @@
 """
 Table Storage checkpoint management.
-Supports per-domain checkpoint for Identity Intelligence.
+One entity per source; the Identity source keeps its per-domain state inside it.
 
 startDate format: YYYY-MM-DD (date string as expected by SOCRadar API).
 """
 
 import time
 import logging
-from datetime import datetime, timezone, timedelta
 from azure.data.tables import TableServiceClient, TableEntity
 from azure.core.exceptions import ResourceNotFoundError
 
@@ -54,18 +53,3 @@ def save(storage_account_name: str, credential, source: str, data: dict):
             entity[k] = v
     client.upsert_entity(entity)
     logger.info("[CHECKPOINT] Saved for source=%s: %s", source, data)
-
-
-def get_start_date(checkpoint: dict, initial_lookback_minutes: int) -> str:
-    """
-    Return the startDate string (YYYY-MM-DD) for a fetch cycle.
-
-    Checks both checkpoint_date (Identity API) and last_start_date (standard) keys.
-    If neither exists, calculates from initial_lookback_minutes.
-    """
-    if checkpoint.get("checkpoint_date"):
-        return str(checkpoint["checkpoint_date"])
-    if checkpoint.get("last_start_date"):
-        return str(checkpoint["last_start_date"])
-    lookback_dt = datetime.now(timezone.utc) - timedelta(minutes=initial_lookback_minutes)
-    return lookback_dt.strftime("%Y-%m-%d")

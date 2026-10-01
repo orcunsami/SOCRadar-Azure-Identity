@@ -1,7 +1,7 @@
 """
 Password sanitization utilities.
 All password data must pass through sanitize_password() immediately upon receipt from APIs.
-The original plaintext is NEVER stored — only passed transiently to ROPC if enabled.
+The original plaintext is NEVER stored; it reaches LAW only when ENABLE_LOG_PLAINTEXT_PASSWORD is on.
 """
 
 import re
@@ -15,7 +15,7 @@ def sanitize_password(password) -> dict:
         present     : bool   — was a password field present?
         masked      : str    — safe version for logging/storage (default behavior)
         is_plaintext: bool   — is this an unmasked credential?
-        _raw        : str    — INTERNAL USE ONLY for ROPC. Caller must del after use.
+        _raw        : str    — INTERNAL USE ONLY (plaintext logging switch). Caller must del after use.
     """
     if not password or not str(password).strip():
         return {"present": False, "masked": None, "is_plaintext": False, "_raw": None}
@@ -38,7 +38,7 @@ def sanitize_password(password) -> dict:
         "present": True,
         "masked": masked,
         "is_plaintext": not is_masked,
-        "_raw": pw,          # ROPC callers: use this, then immediately `del result["_raw"]`
+        "_raw": pw,          # internal: use, then immediately `del result["_raw"]`
     }
 
 

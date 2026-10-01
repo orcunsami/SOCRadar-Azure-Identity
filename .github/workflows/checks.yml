@@ -36,11 +36,17 @@ jobs:
       - name: A fetch that does not finish is not reported as zero errors
         run: python3 production/tests/test_fetch_failed.py
 
+      - name: A run that lost data is counted and does not move the checkpoint
+        run: python3 production/tests/test_silent_loss.py
+
       - name: Package is pushed by zip deploy and re-pushed on redeploy
         run: python3 production/tests/test_package_push.py
 
       - name: Both prechecks resolve the workspace before anything is created
         run: python3 production/tests/test_workspace_guard.py
+
+      - name: Mutations are caught
+        run: python3 production/tests/mutate.py
 
       - name: No secrets in tracked files
         run: |

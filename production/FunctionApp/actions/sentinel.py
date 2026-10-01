@@ -5,6 +5,7 @@ Incident comments NEVER contain password or credential information.
 
 import uuid
 import logging
+import functools
 import requests
 
 logger = logging.getLogger("socradar.entra.sentinel")
@@ -17,14 +18,20 @@ INCIDENTS_URL = (
 )
 
 
-def _get_mgmt_token(tenant_id: str, client_id: str, client_secret: str) -> str:
-    """Acquire management API token via client credentials."""
+@functools.lru_cache(maxsize=1)
+def _msal_app(tenant_id: str, client_id: str, client_secret: str):
+    """One MSAL app per process, so its token cache serves every incident of a run."""
     from msal import ConfidentialClientApplication
-    app = ConfidentialClientApplication(
+    return ConfidentialClientApplication(
         client_id=client_id,
         client_credential=client_secret,
         authority=f"https://login.microsoftonline.com/{tenant_id}"
     )
+
+
+def _get_mgmt_token(tenant_id: str, client_id: str, client_secret: str) -> str:
+    """Acquire management API token via client credentials."""
+    app = _msal_app(tenant_id, client_id, client_secret)
     result = app.acquire_token_for_client(
         scopes=["https://management.azure.com/.default"]
     )
@@ -33,9 +40,11 @@ def _get_mgmt_token(tenant_id: str, client_id: str, client_secret: str) -> str:
     return result["access_token"]
 
 
-def create_incident(conf: dict, email: str, source: str, severity: str):
+def create_incident(conf: dict, email: str, source: str, severity: str) -> bool:
     """
     Create a Sentinel incident for a compromised employee credential.
+    Returns True when Sentinel accepted it. Needs a Sentinel role (Responder or Contributor)
+    for the App Registration on the workspace; without it the PUT answers 403.
 
     SECURITY: Only email, source name, and severity are included.
     Password/credential data NEVER appears in incident title, description, or comments.
@@ -46,7 +55,7 @@ def create_incident(conf: dict, email: str, source: str, severity: str):
 
     if not all([workspace_name, workspace_rg, subscription_id]):
         logger.warning("[SENTINEL] Incident creation skipped — workspace config incomplete")
-        return
+        return False
 
     try:
         token = _get_mgmt_token(
@@ -56,7 +65,7 @@ def create_incident(conf: dict, email: str, source: str, severity: str):
         )
     except Exception as e:
         logger.error("[SENTINEL] Token error: %s", e)
-        return
+        return False
 
     incident_id = str(uuid.uuid4())
     url = INCIDENTS_URL.format(
@@ -83,9 +92,9 @@ def create_incident(conf: dict, email: str, source: str, severity: str):
             "severity":    severity.capitalize(),
             "status":      "New",
             "labels": [
-                {"labelName": "SOCRadar"},
-                {"labelName": source.upper()},
-                {"labelName": "LeakedCredential"},
+                {"labelName": "SOCRadar", "labelType": "User"},
+                {"labelName": source.upper(), "labelType": "User"},
+                {"labelName": "LeakedCredential", "labelType": "User"},
             ]
         }
     }
@@ -99,7 +108,8 @@ def create_incident(conf: dict, email: str, source: str, severity: str):
         resp = requests.put(url, json=body, headers=headers, timeout=20)
         if resp.status_code in (200, 201):
             logger.info("[SENTINEL] Incident created for %s (source=%s, severity=%s)", email, source, severity)
-        else:
-            logger.warning("[SENTINEL] Incident create failed: HTTP %d — %s", resp.status_code, resp.text[:200])
+            return True
+        logger.warning("[SENTINEL] Incident create failed: HTTP %d — %s", resp.status_code, resp.text[:200])
     except requests.RequestException as e:
         logger.error("[SENTINEL] Request error: %s", e)
+    return False

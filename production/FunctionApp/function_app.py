@@ -96,6 +96,7 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
 
     found = not_found = actions = errors = 0
     records = []
+    hold = False  # set when a record may be lost: the checkpoint must not move past it
 
     # Extract checkpoint before the loop
     new_checkpoint = employees[-1].get("_checkpoint_update", {}) if employees else {}
@@ -109,7 +110,15 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
     if fetch_failed:
         logger.error("[IDENTITY] SOCRadar fetch did not finish — counted as an error, checkpoint held")
         errors += 1
-        new_checkpoint = {}
+        hold = True
+
+    if graph_headers is None:
+        logger.error("[ENTRA] No Graph token — no Entra ID action can run; counted as an error, checkpoint held")
+        errors += 1
+        hold = True
+
+    if conf.get("enable_add_to_group") and not conf.get("security_group_id"):
+        logger.warning("[ENTRA] ENABLE_ADD_TO_GROUP is on but SECURITY_GROUP_ID is empty — add-to-group is skipped")
 
     for emp in employees:
         try:
@@ -125,7 +134,19 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
                 records.append(emp)
                 continue
 
-            user_info = entra.lookup_user(email, graph_headers)
+            try:
+                user_info = entra.lookup_user(email, graph_headers)
+            except entra.GraphLookupError as e:
+                # Graph did not answer yes or no: not "not_found" (EXP-AZURE-0141)
+                logger.error("[ENTRA] lookup failed for %s: %s", email, e)
+                errors += 1
+                hold = True
+                emp["entra_status"] = "lookup_error"
+                emp["actions_taken"] = []
+                emp.pop("_checkpoint_update", None)
+                records.append(emp)
+                continue
+
             if user_info is None:
                 not_found += 1
                 emp["entra_status"] = "not_found"
@@ -139,26 +160,7 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
             emp["entra_account_enabled"] = user_info.get("accountEnabled", True)
             emp["entra_user_id"] = user_info.get("id", "")
 
-            # ROPC validation (only if plaintext password available)
-            ropc_result = None
-            if conf["enable_ropc"] and emp.get("sanitized", {}).get("is_plaintext"):
-                raw_pw = emp.get("sanitized", {}).get("_raw")
-                if raw_pw:
-                    ropc_result = entra.validate_password_ropc(
-                        email=email,
-                        password=raw_pw,
-                        tenant_id=conf["tenant_id"],
-                        client_id=conf["client_id"]
-                    )
-                    del raw_pw
-
-            if ropc_result == "valid":
-                emp["entra_status"] = "compromised"
-                emp["severity"] = "CRITICAL"
-            elif ropc_result in ("invalid", "mfa_blocked"):
-                emp["severity"] = "MEDIUM"
-            else:
-                emp["severity"] = "MEDIUM"
+            emp["severity"] = "MEDIUM"
 
             # Take actions
             taken = []
@@ -190,7 +192,8 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
                 actions += 1
 
             if conf["enable_create_incident"]:
-                sent.create_incident(conf, email, "identity", emp.get("severity", "MEDIUM"))
+                if not sent.create_incident(conf, email, "identity", emp["severity"]):
+                    errors += 1  # visible in the audit row; not a reason to replay the window
 
             emp["actions_taken"] = taken
             emp.pop("_checkpoint_update", None)
@@ -199,13 +202,18 @@ def _process_employees(employees: list, conf: dict, credential, graph_headers: d
         except Exception as e:
             logger.error("[IDENTITY] Error processing %s: %s", emp.get("email", "?"), e)
             errors += 1
+            hold = True
 
     # Write records to LAW
     if records:
-        law.write_records(conf, "identity", records)
+        failed_batches = law.write_records(conf, "identity", records)
+        if failed_batches:
+            logger.error("[LAW] %d batch(es) were not written — counted as errors, checkpoint held", failed_batches)
+            errors += failed_batches
+            hold = True
 
     # Update checkpoint
-    if new_checkpoint:
+    if new_checkpoint and not hold:
         cp.save(conf["storage_account_name"], credential, "identity", new_checkpoint)
 
     return {

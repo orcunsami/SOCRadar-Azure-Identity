@@ -1,18 +1,22 @@
 """
 Microsoft Entra ID actions via Microsoft Graph API.
 All actions use Application permissions with client credentials flow (MSAL).
-ROPC is optional and requires "Allow public client flows" enabled on App Registration.
 """
 
 import logging
+import time
 import requests
-from msal import ConfidentialClientApplication, PublicClientApplication
+from urllib.parse import quote
+from msal import ConfidentialClientApplication
 
 logger = logging.getLogger("socradar.entra.graph")
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA  = "https://graph.microsoft.com/beta"
-LOGIN_URL   = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+
+
+class GraphLookupError(RuntimeError):
+    """The lookup did not answer yes or no (401/403/429/5xx, transport). Not 'user not found'."""
 
 
 def get_graph_token(tenant_id: str, client_id: str, client_secret: str) -> str:
@@ -33,22 +37,31 @@ def get_graph_token(tenant_id: str, client_id: str, client_secret: str) -> str:
 def lookup_user(email: str, graph_headers: dict) -> dict | None:
     """
     Look up a user in Entra ID by email (UPN).
-    Returns user dict or None if not found.
+    Returns the user dict, or None only when Graph says 404.
+    Raises GraphLookupError for anything else; 429/502/503/504 are retried twice.
     """
-    url = f"{GRAPH_BASE}/users/{email}"
-    try:
-        resp = requests.get(url, headers=graph_headers, timeout=15)
+    url = f"{GRAPH_BASE}/users/{quote(email, safe='@')}"
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=graph_headers, timeout=15)
+        except requests.RequestException as e:
+            logger.error("[ENTRA] lookup %s → error: %s", email, e)
+            raise GraphLookupError(f"transport error: {e}") from e
         if resp.status_code == 200:
             logger.debug("[ENTRA] lookup %s → found", email)
             return resp.json()
         if resp.status_code == 404:
             logger.debug("[ENTRA] lookup %s → not_found", email)
             return None
+        if resp.status_code in (429, 502, 503, 504) and attempt < 2:
+            try:
+                wait = min(int(resp.headers.get("Retry-After", 2)), 30)
+            except (TypeError, ValueError):
+                wait = 2
+            time.sleep(wait)
+            continue
         logger.warning("[ENTRA] lookup %s → HTTP %d", email, resp.status_code)
-        return None
-    except requests.RequestException as e:
-        logger.error("[ENTRA] lookup %s → error: %s", email, e)
-        return None
+        raise GraphLookupError(f"HTTP {resp.status_code}")
 
 
 def revoke_sessions(user_id: str, graph_headers: dict) -> bool:
@@ -70,11 +83,11 @@ def add_to_group(user_id: str, group_id: str, graph_headers: dict) -> bool:
     body = {"@odata.id": f"{GRAPH_BASE}/directoryObjects/{user_id}"}
     try:
         resp = requests.post(url, headers=graph_headers, json=body, timeout=15)
-        # 204 = added, 400 with "already exists" = already member
+        # 204 = added, 400 "...already exist for the following modified properties" = already member
         if resp.status_code == 204:
             logger.info("[ENTRA] addToGroup %s → ok", user_id[:8])
             return True
-        if resp.status_code == 400 and "already exists" in resp.text.lower():
+        if resp.status_code == 400 and "already exist" in resp.text.lower():
             logger.info("[ENTRA] addToGroup %s → already member", user_id[:8])
             return True
         logger.warning("[ENTRA] addToGroup %s → HTTP %d: %s", user_id[:8], resp.status_code, resp.text[:100])
@@ -132,54 +145,3 @@ def confirm_compromised(user_id: str, graph_headers: dict) -> bool:
     except requests.RequestException as e:
         logger.error("[ENTRA] confirmRisky %s → error: %s", user_id[:8], e)
         return False
-
-
-def validate_password_ropc(email: str, password: str, tenant_id: str, client_id: str) -> str:
-    """
-    Validate credential via ROPC (Resource Owner Password Credentials).
-
-    WARNING: Microsoft discourages ROPC. Only use when explicitly enabled.
-    Requires "Allow public client flows" in App Registration.
-
-    Returns:
-        "valid"       — credential is active and correct
-        "invalid"     — password is wrong (user changed it)
-        "mfa_blocked" — MFA required, can't validate via ROPC
-        "error"       — unexpected error
-    """
-    url = LOGIN_URL.format(tenant=tenant_id)
-    data = {
-        "grant_type": "password",
-        "client_id":  client_id,
-        "username":   email,
-        "password":   password,
-        "scope":      "https://graph.microsoft.com/.default",
-    }
-    try:
-        resp = requests.post(url, data=data, timeout=15)
-        body = resp.json()
-
-        if resp.status_code == 200 and "access_token" in body:
-            logger.warning("[ENTRA:ROPC] %s → VALID CREDENTIAL (CRITICAL)", email)
-            return "valid"
-
-        error = body.get("error", "")
-        error_desc = body.get("error_description", "")
-
-        if "AADSTS50076" in error_desc or "AADSTS50079" in error_desc:
-            logger.info("[ENTRA:ROPC] %s → mfa_blocked", email)
-            return "mfa_blocked"
-
-        if "AADSTS50126" in error_desc:
-            logger.info("[ENTRA:ROPC] %s → invalid (wrong password)", email)
-            return "invalid"
-
-        logger.warning("[ENTRA:ROPC] %s → unexpected: %s", email, error_desc[:100])
-        return "error"
-
-    except requests.RequestException as e:
-        logger.error("[ENTRA:ROPC] %s → request error: %s", email, e)
-        return "error"
-    finally:
-        # Ensure password is not retained in any local traceback or closure
-        del password

@@ -68,9 +68,9 @@
         },
         "EnableAddToGroup": {
             "type": "bool",
-            "defaultValue": true,
+            "defaultValue": false,
             "metadata": {
-                "description": "Add compromised users to security group (requires SecurityGroupId)"
+                "description": "Add compromised users to security group (requires SecurityGroupId; skipped while it is empty)"
             }
         },
         "EnablePasswordChange": {
@@ -94,13 +94,6 @@
                 "description": "Confirm compromised users in Identity Protection (requires Entra ID P1/P2 license)"
             }
         },
-        "EnableROPC": {
-            "type": "bool",
-            "defaultValue": false,
-            "metadata": {
-                "description": "Validate leaked credentials via ROPC (Resource Owner Password Credentials). Microsoft discourages ROPC in production."
-            }
-        },
         "EnableCreateIncident": {
             "type": "bool",
             "defaultValue": false,
@@ -118,10 +111,9 @@
         "PollingIntervalHours": {
             "type": "int",
             "defaultValue": 6,
-            "minValue": 1,
-            "maxValue": 24,
+            "allowedValues": [1, 2, 3, 4, 6, 8, 12, 24],
             "metadata": {
-                "description": "How often to check for new leaked credentials (1-24 hours)"
+                "description": "How often to check for new leaked credentials, in hours (must divide 24 evenly)"
             }
         },
         "InitialLookbackMinutes": {
@@ -420,10 +412,6 @@
                         {
                             "name": "ENABLE_CONFIRM_RISKY",
                             "value": "[string(parameters('EnableConfirmRisky'))]"
-                        },
-                        {
-                            "name": "ENABLE_ROPC",
-                            "value": "[string(parameters('EnableROPC'))]"
                         },
                         {
                             "name": "ENABLE_CREATE_INCIDENT",

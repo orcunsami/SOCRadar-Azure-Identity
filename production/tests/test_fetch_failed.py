@@ -55,10 +55,10 @@ class CallerCountsFailedFetch(unittest.TestCase):
 
     def _run(self, employees):
         saved = []
-        for p in (patch.object(function_app.law, "write_records"),
+        for p in (patch.object(function_app.law, "write_records", return_value=0),
                   patch.object(function_app.cp, "save", side_effect=lambda *a: saved.append(a[-1]))):
             p.start(); self.addCleanup(p.stop)
-        return function_app._process_employees(employees, CONF, None, None), saved
+        return function_app._process_employees(employees, CONF, None, {"Authorization": "Bearer x"}), saved
 
     def test_marked_fetch_counts_one_error_and_holds_the_checkpoint(self):
         marker = {"_checkpoint_update": {"checkpoint_date": "2026-09-01", "offset": 0},

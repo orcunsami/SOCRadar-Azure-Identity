@@ -9,6 +9,9 @@ reverted inside one second leaves a .pyc that still looks current, and the next
 run would execute the mutated bytecode.
 
     python3 tests/mutate.py
+
+The code tests import the Function App, so run it with an interpreter that has
+FunctionApp/requirements.txt installed.
 """
 
 import os
@@ -69,6 +72,61 @@ MUTATIONS = [
   "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
   "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
   'tests/test_workspace_guard.py'),
+ 
+ # Audit 0080 (identity.md): the code paths that lose data. The first two cover test_fetch_failed.py,
+ # which had no mutation before; the rest cover test_silent_loss.py.
+ ('unfinished SOCRadar read forgotten by the caller', 'FunctionApp/function_app.py',
+  'fetch_failed = any(e.get("_fetch_failed") for e in employees)', 'fetch_failed = False',
+  'tests/test_fetch_failed.py'),
+ ('failed domain not marked by the source', 'FunctionApp/sources/identity.py',
+  'all_records[-1]["_fetch_failed"] = True', 'pass',
+  'tests/test_fetch_failed.py'),
+ ('LAW write result ignored', 'FunctionApp/actions/law_writer.py',
+  '        if not _post(workspace_id, workspace_key, log_type, batch):\n            failed += 1\n',
+  '        _post(workspace_id, workspace_key, log_type, batch)\n',
+  'tests/test_silent_loss.py'),
+ ('Graph 403 read as user not found', 'FunctionApp/actions/entra_id.py',
+  'raise GraphLookupError(f"HTTP {resp.status_code}")', 'return None',
+  'tests/test_silent_loss.py'),
+ ('Graph throttling not retried', 'FunctionApp/actions/entra_id.py',
+  'and attempt < 2:', 'and attempt < 0:',
+  'tests/test_silent_loss.py'),
+ ('checkpoint saved although a record may be lost', 'FunctionApp/function_app.py',
+  'if new_checkpoint and not hold:', 'if new_checkpoint:',
+  'tests/test_silent_loss.py'),
+ ('missing Graph token not counted', 'FunctionApp/function_app.py',
+  '    if graph_headers is None:\n        logger.error("[ENTRA] No Graph token',
+  '    if False:\n        logger.error("[ENTRA] No Graph token',
+  'tests/test_silent_loss.py'),
+ ('Graph lookup error does not hold the checkpoint', 'FunctionApp/function_app.py',
+  '                hold = True\n                emp["entra_status"] = "lookup_error"',
+  '                emp["entra_status"] = "lookup_error"',
+  'tests/test_silent_loss.py'),
+ ('per-record exception does not hold the checkpoint', 'FunctionApp/function_app.py',
+  '            errors += 1\n            hold = True\n\n    # Write records to LAW',
+  '            errors += 1\n\n    # Write records to LAW',
+  'tests/test_silent_loss.py'),
+ ('incident failure not counted', 'FunctionApp/function_app.py',
+  'if not sent.create_incident(', 'if False and not sent.create_incident(',
+  'tests/test_silent_loss.py'),
+ ('every domain starts from one shared date', 'FunctionApp/sources/identity.py',
+  'start = prev.get("date") or default_start', 'start = default_start',
+  'tests/test_silent_loss.py'),
+ ('seen ids not remembered', 'FunctionApp/sources/identity.py',
+  'if short and short in seen_old:', 'if False:',
+  'tests/test_silent_loss.py'),
+ ('empty window counted as a record', 'FunctionApp/sources/identity.py',
+  '{"_checkpoint_update": update, "_empty_marker": True}', '{"_checkpoint_update": update}',
+  'tests/test_silent_loss.py'),
+ ('already-a-member wording too narrow', 'FunctionApp/actions/entra_id.py',
+  '"already exist" in resp.text.lower()', '"already exists" in resp.text.lower()',
+  'tests/test_silent_loss.py'),
+ ('email not encoded in the lookup URL', 'FunctionApp/actions/entra_id.py',
+  "quote(email, safe='@')", 'email',
+  'tests/test_silent_loss.py'),
+ ('incident labels lose their type', 'FunctionApp/actions/sentinel.py',
+  '{"labelName": "SOCRadar", "labelType": "User"},', '{"labelName": "SOCRadar"},',
+  'tests/test_silent_loss.py'),
 ]
 blind = []
 for name, path, old, new, test in MUTATIONS:

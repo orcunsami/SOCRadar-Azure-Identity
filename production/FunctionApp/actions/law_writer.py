@@ -73,8 +73,8 @@ def _clean_record(rec: dict, enable_log_plaintext: bool) -> dict:
     return out
 
 
-def write_records(conf: dict, source_name: str, records: list):
-    """Write source records to appropriate LAW table in batches."""
+def write_records(conf: dict, source_name: str, records: list) -> int:
+    """Write source records to appropriate LAW table in batches. Returns the number of failed batches."""
     log_type = TABLE_MAP.get(source_name, f"SOCRadar_{source_name.upper()}_CL")
     if log_type.endswith("_CL"):
         log_type = log_type[:-3]
@@ -85,14 +85,17 @@ def write_records(conf: dict, source_name: str, records: list):
 
     cleaned = [_clean_record(r, enable_log_plaintext) for r in records]
 
+    failed = 0
     for i in range(0, len(cleaned), BATCH_SIZE):
         batch = cleaned[i:i + BATCH_SIZE]
-        _post(workspace_id, workspace_key, log_type, batch)
+        if not _post(workspace_id, workspace_key, log_type, batch):
+            failed += 1
         if i + BATCH_SIZE < len(cleaned):
             time.sleep(0.5)
+    return failed
 
 
-def write_audit(conf: dict, audit_results: list):
+def write_audit(conf: dict, audit_results: list) -> bool:
     """Write audit summary records to SOCRadar_Identity_Audit_CL table."""
     workspace_id = conf["workspace_id"]
     workspace_key = conf["workspace_key"]
@@ -112,4 +115,4 @@ def write_audit(conf: dict, audit_results: list):
             "timestamp":        ts,
         })
 
-    _post(workspace_id, workspace_key, "SOCRadar_Identity_Audit", records)
+    return _post(workspace_id, workspace_key, "SOCRadar_Identity_Audit", records)

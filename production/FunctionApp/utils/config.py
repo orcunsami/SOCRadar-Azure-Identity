@@ -42,9 +42,8 @@ def load() -> dict:
         "client_secret": _get("ENTRA_CLIENT_SECRET", required=True),
 
         # Action toggles
-        "enable_ropc":              _bool("ENABLE_ROPC", False),
         "enable_revoke_session":    _bool("ENABLE_REVOKE_SESSION", True),
-        "enable_add_to_group":      _bool("ENABLE_ADD_TO_GROUP", True),
+        "enable_add_to_group":      _bool("ENABLE_ADD_TO_GROUP", False),
         "enable_password_change":   _bool("ENABLE_PASSWORD_CHANGE", False),
         "enable_disable_account":   _bool("ENABLE_DISABLE_ACCOUNT", False),
         "enable_confirm_risky":     _bool("ENABLE_CONFIRM_RISKY", False),

@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## SOCRadar Entra ID — Identity Intelligence Dashboard\nEmployee credentials from SOCRadar Identity Intelligence (pay-per-use), enriched with Microsoft Entra ID lookup and remediation actions."
+        "json": "## SOCRadar Identity Intelligence Dashboard\nEmployee credentials from SOCRadar Identity Intelligence (pay-per-use), enriched with Microsoft Entra ID lookup and remediation actions."
       },
       "name": "header"
     },
@@ -146,7 +146,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "SOCRadar_Identity_CL\n| project TimeGenerated, email_s, entra_status_s, password_present_b, password_masked_s, country_s, source_type_s, actions_taken_s\n| order by TimeGenerated desc\n| take 50",
+        "query": "SOCRadar_Identity_CL\n| project TimeGenerated, email_s, entra_status_s, password_present_b, password_masked_s, country_s, monitored_domain_s, actions_taken_s\n| order by TimeGenerated desc\n| take 50",
         "size": 0,
         "title": "Recent Identity Records",
         "queryType": 0,

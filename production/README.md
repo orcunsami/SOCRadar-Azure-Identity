@@ -25,7 +25,23 @@ parameters: the template reads both from the workspace you name.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | WorkspaceResourceGroup | (deployment RG) | Set it when the workspace lives in another resource group |
-| EnableCreateIncident | false | Create Microsoft Sentinel incidents for compromised accounts. Requires Microsoft Sentinel on the workspace |
+| WorkspaceLocation | (deployment RG location) | Region of the workspace |
+| SecurityGroupId | (empty) | Entra ID group for compromised users. Required for `EnableAddToGroup` |
+| EnableRevokeSession | **true** | Revoke all sign-in sessions of a matched user. On by default, runs for every matched record |
+| EnableAddToGroup | false | Add matched users to `SecurityGroupId`. Skipped (with a warning in the log) while the group is empty |
+| EnablePasswordChange | false | Force a password change at next sign-in |
+| EnableDisableAccount | false | Disable the account. Use with caution |
+| EnableConfirmRisky | false | Confirm the user as compromised in Identity Protection (Entra ID P1/P2) |
+| EnableCreateIncident | false | Create Microsoft Sentinel incidents for matched users. Needs Microsoft Sentinel on the workspace and a Sentinel role for the App Registration, see below |
+| EnableLogPlaintextPassword | false | Write the password to Log Analytics when the API returns it unmasked. The API reference describes the value as masked |
+| PollingIntervalHours | 6 | 1, 2, 3, 4, 6, 8, 12 or 24 |
+| InitialLookbackMinutes | 600 | History to fetch on the first run |
+| PackageUri | v1.0.0 release | Function package, see "How the code gets there" |
+
+`EnableCreateIncident` signs in with the App Registration (not the managed identity). Give it
+**Microsoft Sentinel Responder** (or Contributor) on the workspace. Without that role the
+deployment is green and every incident call answers 403: the audit row counts it under
+`error_count` and nothing else changes.
 
 ### The workspace has to exist before you deploy
 
@@ -53,7 +69,16 @@ az provider register --namespace Microsoft.AlertsManagement
 
 ## Post-Deployment
 
-The Function App runs every 6 hours (configurable via `POLLING_SCHEDULE`). First run triggers automatically on deployment.
+The Function App runs every `PollingIntervalHours` hours (6 by default) and once whenever the app starts.
+Change the interval by redeploying; an edited `POLLING_SCHEDULE` app setting is overwritten by the next deployment.
+
+A run that loses data is not clean: a failed Log Analytics write, a Graph error (401/403/429/5xx), a missing
+Graph token or an unfinished SOCRadar read is counted in `error_count` and the checkpoint stays where it was,
+so the next run reads the same window again. Records are repeated in that case; `record_id` identifies them.
+Every repeat is another paid SOCRadar query, so a wrong Entra secret or a missing permission costs on every run until it is fixed.
+
+The checkpoint is kept per domain. SOCRadar takes a start date, not a time, so the same day comes back on
+every run; ids already returned for the checkpoint day are remembered and not processed twice.
 
 ### LAW Tables
 
@@ -71,12 +96,27 @@ The App Registration needs these Microsoft Graph API permissions (Application ty
 | User.Read.All | Look up users by email |
 | User.RevokeSessions.All | Revoke active sessions |
 | GroupMember.ReadWrite.All | Add to security group |
-| User.ReadWrite.All | Disable account, force password change |
+| User-PasswordProfile.ReadWrite.All | Force password change |
+| User.EnableDisableAccount.All | Disable account |
 | IdentityRiskyUser.ReadWrite.All | Confirm compromised (requires P1/P2) |
+
+Only grant the permissions of the actions you turn on. For administrator accounts, app-only password
+and disable calls also need an Entra role assigned to the app's service principal.
 
 ### Workbook
 
 Import `Workbooks/SOCRadar-Identity-Workbook.json` into Microsoft Sentinel for dashboard visualization.
+
+### Not measured yet
+
+- **Masked username.** The SOCRadar API reference describes `username` as "Masked username/email"
+  (`tes****t@test.com`). The function looks the value up in Entra ID as a UPN, so a masked value matches
+  no user. A production response has not been read (no Identity credit). Before relying on the Entra
+  actions, run the Test below and check `SOCRadar_Identity_CL | summarize count() by entra_status_s`:
+  if everything is `not_found` and `email_s` contains `****`, the matching needs another design.
+- **Log Analytics ingestion.** Records are written with the HTTP Data Collector API. Microsoft ended
+  support for it on 14 September 2026; ingestion still works. A move to the Logs Ingestion API
+  (DCE + DCR) is not done.
 
 ## How the code gets there
 
@@ -115,13 +155,6 @@ Rotating the storage account keys invalidates the read token inside that pointer
 loses its code at the next restart -- issue a new token for the same blob and write the
 pointer back.
 
-One red row in **Resource group -> Deployments** is not ours and is harmless:
-`Failure-Anomalies-Alert-Rule-Deployment-*`. Azure creates it by itself when the
-Application Insights component appears, and it fails on a subscription that has
-not registered the `Microsoft.AlertsManagement` provider (measured 7 Sep 2026).
-Nothing in this template refers to it and the integration works without it;
-register that provider if you want the smart-detection alert.
-
 ## Test
 
 ```bash
@@ -131,7 +164,7 @@ curl -X POST "https://<function-app>.azurewebsites.net/admin/functions/socradar_
   -H "Content-Type: application/json" \
   -d '{}'
 
-# Check results in Log Analytics
+# Check results in Log Analytics (the first run starts when the app starts)
 SOCRadar_Identity_CL | take 10
 SOCRadar_Identity_Audit_CL | take 5
 ```

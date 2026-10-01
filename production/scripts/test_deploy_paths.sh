@@ -259,4 +259,4 @@ if [ "$fails" -eq 0 ]; then
 else
     echo "$fails assertion(s) failed."
 fi
-exit 0
+[ "$fails" -eq 0 ]
