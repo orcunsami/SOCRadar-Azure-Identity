@@ -25,6 +25,8 @@
 #   E  cross-RG onto an onboarded workspace    -> succeeds (workspaceResourceId fix)
 #   F  redeploy of B's resource group          -> the guard does not block it
 #
+# B, C, E and F also count the deployed functions (exactly 1 expected).
+#
 # C and E matter most. B skips the onboarding guard, so a wrong api-version or
 # field name inside it would leave the cheap paths green and fail only at a
 # customer -- that is how reference(...).name once shipped in Incidents. And E
@@ -126,6 +128,27 @@ count() {  # count <rg>
     az resource list -g "$1" --query "length(@)" -o tsv 2>/dev/null
 }
 
+# Functions the Function App's host has indexed, read from ARM. Prints the
+# number or nothing, so an unreadable app can never look like a count. The
+# template's own deployment script waits for >= 1 before it reports success;
+# this is the harness reading it independently (the product has exactly one).
+fn_count() {  # fn_count <rg>
+    local app
+    app=$(az functionapp list -g "$1" --query "[0].name" -o tsv 2>/dev/null)
+    [ -n "$app" ] || return 0
+    az rest --method get \
+        --url "https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$1/providers/Microsoft.Web/sites/$app/functions?api-version=2023-12-01" \
+        --query 'length(value)' -o tsv 2>/dev/null
+}
+
+fn_row() {  # fn_row <label> <rg>
+    local n
+    n=$(fn_count "$2")
+    [ "$n" = 1 ] \
+        && row "$1 app indexed its function" PASS "1 function (ARM)" \
+        || row "$1 app indexed its function" FAIL "expected 1 function, read '${n:-<unreadable>}'"
+}
+
 onboard() {  # onboard <rg> <workspace>
     az rest --method PUT \
         --url "https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$1/providers/Microsoft.OperationalInsights/workspaces/$2/providers/Microsoft.SecurityInsights/onboardingStates/default?api-version=2023-02-01" \
@@ -177,10 +200,18 @@ case "$cid" in
     *) row "B guard resolves customerId" FAIL "output was '${cid:-<empty>}'" ;;
 esac
 
-ost=$(state "$RG_APP" precheck-sentinel-onboarded)
-[ -z "$ost" ] \
-    && row "B skips the onboarding guard" PASS "condition false" \
-    || row "B skips the onboarding guard" FAIL "it ran anyway: '$ost' - incident creation is off here"
+# "Skipped" is the absence of a deployment record, so the read must first prove
+# it can see records: an empty answer (az failed) is not "skipped". Positive
+# controls: the guard that did run and path B itself have to be listed.
+names=$(az deployment group list -g "$RG_APP" --query "[].name" -o tsv 2>/dev/null)
+case "$names" in
+    *precheck-sentinel-onboarded*) row "B skips the onboarding guard" FAIL "it ran anyway - incident creation is off here" ;;
+    *precheck-workspace-exists*path-b*|*path-b*precheck-workspace-exists*)
+        row "B skips the onboarding guard" PASS "listed ${names//$'\n'/ }, no onboarding record" ;;
+    *) row "B skips the onboarding guard" FAIL "could not read the deployment list (got '${names:-<empty>}'), so nothing was shown skipped" ;;
+esac
+
+fn_row B "$RG_APP"
 
 # ---------------------------------------------------------------- C ---------
 echo "[3/6] Path C: an onboarded workspace, incident creation on ..."
@@ -210,6 +241,8 @@ case "$oid" in
     */providers/Microsoft.SecurityInsights/onboardingStates/default) row "C guard reads the onboarding state" PASS "resolved the resource id" ;;
     *) row "C guard reads the onboarding state" FAIL "output was '${oid:-<empty>}'" ;;
 esac
+
+fn_row C "$RG_C"
 
 # ---------------------------------------------------------------- D ---------
 echo "[4/6] Path D: a workspace with no Microsoft Sentinel, incidents on ..."
@@ -245,6 +278,8 @@ wsid=$(az functionapp config appsettings list -g "$RG_X" \
     && row "E app setting names the workspace RG" PASS "$wsid" \
     || row "E app setting names the workspace RG" FAIL "expected $RG_C, got '${wsid:-<unreadable>}'"
 
+fn_row E "$RG_X"
+
 # ---------------------------------------------------------------- F ---------
 echo "[6/6] Path F: redeploying B's resource group with the guard active ..."
 deploy "$RG_APP" path-f WorkspaceName="$WS" EnableCreateIncident=false
@@ -252,6 +287,8 @@ st=$(state "$RG_APP" path-f)
 [ "$st" = Succeeded ] \
     && row "F redeploy succeeds" PASS "$st" \
     || row "F redeploy succeeds" FAIL "expected Succeeded, got '${st:-<unreadable>}', failing step: $(blame_detail "$RG_APP" path-f)"
+
+fn_row F "$RG_APP"
 
 echo
 if [ "$fails" -eq 0 ]; then

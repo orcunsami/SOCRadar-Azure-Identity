@@ -39,6 +39,23 @@ class SourceMarksFailedFetch(unittest.TestCase):
                 records = identity.fetch(CONF, {})
             self.assertTrue(records and records[-1].get("_fetch_failed"), resp.status_code)
 
+    def test_http_402_log_states_the_ambiguity(self):
+        # The customer's key and a made-up key got the same 402 body (measured); an out-of-credit key was not
+        # measured. The message must name all causes and say the response does not tell them apart.
+        with patch.object(identity.requests, "get", return_value=_resp(402)):
+            with self.assertLogs("socradar.entra.identity", level="ERROR") as cm:
+                records = identity.fetch(CONF, {})
+        self.assertTrue(records[-1].get("_fetch_failed"))
+        msg = " ".join(cm.output).lower()
+        for part in ("402", "unknown", "inactive", "out of credit", "does not say which"):
+            self.assertIn(part, msg)
+
+    def test_other_http_errors_do_not_get_the_402_hint(self):
+        with patch.object(identity.requests, "get", return_value=_resp(502)):
+            with self.assertLogs("socradar.entra.identity", level="ERROR") as cm:
+                identity.fetch(CONF, {})
+        self.assertNotIn("out of credit", " ".join(cm.output).lower())
+
     def test_transport_error_is_marked(self):
         with patch.object(identity.requests, "get", side_effect=identity.requests.RequestException("x")):
             records = identity.fetch(CONF, {})

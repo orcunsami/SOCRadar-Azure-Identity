@@ -107,11 +107,20 @@ and disable calls also need an Entra role assigned to the app's service principa
 
 Import `Workbooks/SOCRadar-Identity-Workbook.json` into Microsoft Sentinel for dashboard visualization.
 
+### HTTP 402 from SOCRadar
+
+`HTTP 402` in the logs, with `error_count` above 0 in the audit table and no records, means the Identity API
+refused the key. Measured on 1 Oct 2026: the key the customer supplied and a made-up key (`bogus-invalid-key-0080`)
+both got the same 402 and the same body (`API key does not exist or is inactive`). What an out-of-credit key
+returns was not measured. The plainest reading is that there is no active Identity Intelligence key, for example a
+Platform key, which is a different product. Ask SOCRadar whether `SocradarIdentityApiKey` is an active Identity
+Intelligence key, then redeploy with the right value. Until then every run fails and the checkpoint does not move.
+
 ### Not measured yet
 
 - **Masked username.** The SOCRadar API reference describes `username` as "Masked username/email"
   (`tes****t@test.com`). The function looks the value up in Entra ID as a UPN, so a masked value matches
-  no user. A production response has not been read (no Identity credit). Before relying on the Entra
+  no user. A production response has not been read (no working Identity key). Before relying on the Entra
   actions, run the Test below and check `SOCRadar_Identity_CL | summarize count() by entra_status_s`:
   if everything is `not_found` and `email_s` contains `****`, the matching needs another design.
 - **Log Analytics ingestion.** Records are written with the HTTP Data Collector API. Microsoft ended

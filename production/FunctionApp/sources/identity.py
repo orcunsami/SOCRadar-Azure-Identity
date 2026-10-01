@@ -164,6 +164,14 @@ def _fetch_domain(api_key: str, domain: str, log_start_date: str, log_end_date: 
             fetch_failed = True
             break
 
+        if resp.status_code == 402:
+            # Measured: the customer's key and a made-up key got the same 402 body. An out-of-credit key was not measured.
+            logger.error(f"domain={domain} HTTP 402 from the Identity API: the key is unknown, inactive or out of credit; "
+                         f"the response does not say which. Check with SOCRadar that it is an active Identity Intelligence key. "
+                         f"Body: {resp.text[:200]}")
+            fetch_failed = True
+            break
+
         if resp.status_code != 200:
             logger.error(f"domain={domain} API error {resp.status_code}: {resp.text[:200]}")
             fetch_failed = True
