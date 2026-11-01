@@ -17,7 +17,7 @@
 #                                 Microsoft.SecurityInsights/incidents and that
 #                                 fails at runtime, hours after a green deploy
 #
-# Six paths:
+# Seven paths (A-F plus G, the restart measurement):
 #   A  missing workspace                       -> fails, resource group EMPTY
 #   B  existing workspace, incidents off       -> succeeds, onboarding guard SKIPPED
 #   C  existing onboarded workspace, incidents on -> both guards SUCCEED
@@ -155,13 +155,13 @@ onboard() {  # onboard <rg> <workspace>
         --body '{"properties":{}}' -o none 2>/dev/null
 }
 
-echo "[0/6] Target subscription: $SUBSCRIPTION"
+echo "[0/7] Target subscription: $SUBSCRIPTION"
 for rg in "$RG_APP" "$RG_BARE" "$RG_D" "$RG_C" "$RG_X"; do
     az group create -n "$rg" -l "$LOCATION" -o none
 done
 
 # ---------------------------------------------------------------- A ---------
-echo "[1/6] Path A: a workspace that does not exist ..."
+echo "[1/7] Path A: a workspace that does not exist ..."
 deploy "$RG_APP" path-a WorkspaceName="$MISSING"
 st=$(state "$RG_APP" path-a)
 [ "$st" = Failed ] \
@@ -180,7 +180,7 @@ blame=$(az deployment operation group list -g "$RG_APP" -n path-a \
     || row "A blames the precheck" FAIL "the precheck was not the failing step: '${blame:-<unreadable>}'"
 
 # ---------------------------------------------------------------- B ---------
-echo "[2/6] Path B: an existing workspace, incident creation off ..."
+echo "[2/7] Path B: an existing workspace, incident creation off ..."
 az monitor log-analytics workspace create -g "$RG_APP" -n "$WS" -l "$LOCATION" -o none 2>/dev/null
 deploy "$RG_APP" path-b WorkspaceName="$WS" EnableCreateIncident=false
 st=$(state "$RG_APP" path-b)
@@ -214,7 +214,7 @@ esac
 fn_row B "$RG_APP"
 
 # ---------------------------------------------------------------- C ---------
-echo "[3/6] Path C: an onboarded workspace, incident creation on ..."
+echo "[3/7] Path C: an onboarded workspace, incident creation on ..."
 az monitor log-analytics workspace create -g "$RG_C" -n "$WS_ONB" -l "$LOCATION" -o none 2>/dev/null
 onboard "$RG_C" "$WS_ONB"
 fixture=$(az rest --method GET \
@@ -245,7 +245,7 @@ esac
 fn_row C "$RG_C"
 
 # ---------------------------------------------------------------- D ---------
-echo "[4/6] Path D: a workspace with no Microsoft Sentinel, incidents on ..."
+echo "[4/7] Path D: a workspace with no Microsoft Sentinel, incidents on ..."
 az monitor log-analytics workspace create -g "$RG_BARE" -n "$WS_BARE" -l "$LOCATION" -o none 2>/dev/null
 deploy "$RG_D" path-d WorkspaceName="$WS_BARE" WorkspaceResourceGroup="$RG_BARE" EnableCreateIncident=true
 st=$(state "$RG_D" path-d)
@@ -259,7 +259,7 @@ n=$(count "$RG_D")
     || row "D leaves nothing behind" FAIL "expected 0, found '${n:-<unreadable>}'"
 
 # ---------------------------------------------------------------- E ---------
-echo "[5/6] Path E: cross-RG onto the workspace C onboarded ..."
+echo "[5/7] Path E: cross-RG onto the workspace C onboarded ..."
 deploy "$RG_X" path-e WorkspaceName="$WS_ONB" WorkspaceResourceGroup="$RG_C" EnableCreateIncident=true
 st=$(state "$RG_X" path-e)
 [ "$st" = Succeeded ] \
@@ -281,7 +281,7 @@ wsid=$(az functionapp config appsettings list -g "$RG_X" \
 fn_row E "$RG_X"
 
 # ---------------------------------------------------------------- F ---------
-echo "[6/6] Path F: redeploying B's resource group with the guard active ..."
+echo "[6/7] Path F: redeploying B's resource group with the guard active ..."
 deploy "$RG_APP" path-f WorkspaceName="$WS" EnableCreateIncident=false
 st=$(state "$RG_APP" path-f)
 [ "$st" = Succeeded ] \
@@ -290,9 +290,82 @@ st=$(state "$RG_APP" path-f)
 
 fn_row F "$RG_APP"
 
+# --- G: one host restart = one startup run (run_on_startup) ----------------------------
+# The key here is a placeholder, so no data is imported; what is measured is that a restart
+# starts the import ONCE (one audit row), not twice. Whether the second run would resend data
+# needs a live key and is not measured here.
+echo "[7/7] Path G: a host restart writes exactly one startup audit row (up to 45 min) ..."
+CUST=$(az monitor log-analytics workspace show -g "$RG_APP" -n "$WS" --query customerId -o tsv 2>/dev/null)
+APP_B=$(az functionapp list -g "$RG_APP" --query "[0].name" -o tsv 2>/dev/null)
+HOST_B=$(az functionapp list -g "$RG_APP" --query "[0].defaultHostName" -o tsv 2>/dev/null)
+res=$(python3 - "$CUST" "$RG_APP" "$APP_B" "$HOST_B" <<'PYEOF'
+import json, os, subprocess, sys, time, urllib.request
+from datetime import datetime, timezone
+cust, rg, app, host = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+POLL = int(os.environ.get("TEST_POLL", "30"))
+KQL = "SOCRadar_Identity_Audit_CL | project TimeGenerated | order by TimeGenerated asc"
+def q():
+    r = subprocess.run(["az", "monitor", "log-analytics", "query", "-w", cust, "--analytics-query", KQL, "-o", "json"],
+                       capture_output=True, text=True)
+    return json.loads(r.stdout) if r.returncode == 0 else None
+def ts(v):
+    v = v.rstrip("Z")
+    if "." in v:
+        a, b = v.split(".")
+        v = a + "." + b[:6]
+    return datetime.fromisoformat(v).replace(tzinfo=timezone.utc)
+deadline = time.time() + int(os.environ.get("TEST_FIRST_RUN_WAIT", "1500"))
+rows = None
+while time.time() < deadline:
+    rows = q()
+    if rows:
+        break
+    time.sleep(POLL)
+if not rows:
+    print("UNREADABLE"); sys.exit(0)
+restart_at = datetime.now(timezone.utc)
+if subprocess.run(["az", "functionapp", "restart", "-g", rg, "-n", app], capture_output=True).returncode != 0:
+    print("NORESTART"); sys.exit(0)
+# 503 after a restart is the redirecting-pointer defect (EXP-AZURE-0202): measure the host itself.
+code = "000"
+hd = time.time() + 600
+while time.time() < hd:
+    try:
+        code = str(urllib.request.urlopen("https://" + host + "/", timeout=30).status)
+    except Exception as e:
+        code = str(getattr(e, "code", "ERR"))
+    if code == "200":
+        break
+    time.sleep(POLL)
+later = []
+deadline = time.time() + int(os.environ.get("TEST_RESTART_WAIT", "1500"))
+while time.time() < deadline:
+    rows = q() or rows
+    later = [r for r in rows if ts(r["TimeGenerated"]) > restart_at]
+    if later:
+        break
+    time.sleep(POLL)
+# Settle: a second startup run would land a few minutes after the first one.
+time.sleep(int(os.environ.get("TEST_SETTLE", "420")))
+rows = q() or rows
+later = [r for r in rows if ts(r["TimeGenerated"]) > restart_at]
+print("RESULT", len(later), code, len(rows))
+PYEOF
+)
+read -r tag later_n host_code all_rows <<< "$res"
+if [ "$tag" != RESULT ]; then
+    row "G audit rows readable" FAIL "no audit row or the restart failed: ${res:-<empty>}"
+elif [ "$host_code" != 200 ]; then
+    row "G the host answers after a restart" FAIL "HTTP $host_code ten minutes after the restart ($all_rows audit rows in total, $later_n after the restart)"
+elif [ "$later_n" = 1 ]; then
+    row "G a restart starts the import once" PASS "1 audit row after the restart"
+else
+    row "G a restart starts the import once" FAIL "$later_n audit row(s) after the restart (expected 1)"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
-    echo "All six deployment paths behaved as asserted."
+    echo "All seven deployment paths behaved as asserted."
 else
     echo "$fails assertion(s) failed."
 fi
