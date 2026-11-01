@@ -139,6 +139,17 @@ MUTATIONS = [
   r'''no function was indexed in 10 minutes'; exit 1''',
   'tests/test_script_messages.py'),
 ]
+# A test that fails on the untouched tree "catches" every mutation for free (a missing azure
+# package alone made 17 of them look caught). Run every test once, unmodified, first.
+red = []
+for test in sorted({m[4] for m in MUTATIONS}):
+    r = subprocess.run([sys.executable, test], cwd=REPO, capture_output=True, text=True, timeout=120,
+                       env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    if r.returncode != 0:
+        red.append(test)
+if red:
+    print("BASELINE RED: %s fail before any mutation, so no mutation result can be trusted" % ", ".join(red))
+    sys.exit(2)
 blind = []
 for name, path, old, new, test in MUTATIONS:
     full = os.path.join(REPO, path)

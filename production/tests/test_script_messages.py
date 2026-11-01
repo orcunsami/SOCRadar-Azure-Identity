@@ -28,10 +28,11 @@ if len(exits) < 6:
 
 for pos in exits:
     before = script[max(0, pos - 220):pos]
-    # the statement right before `exit 1` is the message: echo '...' >&2;  or  echo "..." >&2;
+    # the statement right before `exit 1` must be the message itself, redirected: echo '...' >&2;  or  echo "..." >&2;
+    # (a bare `echo >&2` after a stdout message would pass a weaker check)
     stmt = before.rsplit("echo ", 1)[-1] if "echo " in before else ""
     checks += 1
-    if not re.search(r">&2\s*;?\s*$", stmt):
+    if not re.search(r"""^(?:'[^']+'|"[^"]+")\s*>&2\s*;?\s*$""", stmt):
         failures.append("exit 1 not preceded by an echo to stderr: ..." + before[-90:].replace("\n", " "))
 
 if failures:
