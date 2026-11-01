@@ -130,6 +130,14 @@ MUTATIONS = [
  ('incident labels lose their type', 'FunctionApp/actions/sentinel.py',
   '{"labelName": "SOCRadar", "labelType": "User"},', '{"labelName": "SOCRadar"},',
   'tests/test_silent_loss.py'),
+ ('package URL failure back on stdout', 'azuredeploy.json',
+  r'''echo \"package URL returned HTTP $code\" >&2; exit 1''',
+  r'''echo \"package URL returned HTTP $code\"; exit 1''',
+  'tests/test_script_messages.py'),
+ ('index timeout failure back on stdout', 'azuredeploy.json',
+  r'''no function was indexed in 10 minutes' >&2; exit 1''',
+  r'''no function was indexed in 10 minutes'; exit 1''',
+  'tests/test_script_messages.py'),
 ]
 blind = []
 for name, path, old, new, test in MUTATIONS:
