@@ -105,7 +105,7 @@ and disable calls also need an Entra role assigned to the app's service principa
 
 ### Workbook
 
-Import `Workbooks/SOCRadar-Identity-Workbook.json` into Microsoft Sentinel for dashboard visualization.
+Import `Workbooks/SOCRadar-Identity-Workbook.json` into Microsoft Sentinel for dashboard visualization. In the Microsoft Defender portal workbooks are under Microsoft Sentinel > Threat management > Workbooks. Microsoft Sentinel in the Azure portal is supported until 31 March 2027; after that it is available only in the Microsoft Defender portal.
 
 ### HTTP 402 from SOCRadar
 
