@@ -110,7 +110,7 @@
                 "Direct"
             ],
             "metadata": {
-                "description": "None (default): no incident. AlertBacked: scheduled analytics rules raise an alert and an incident that shows in the Microsoft Defender portal. Direct: the function creates the incident through the Microsoft Sentinel API; it shows only in the Azure portal and the API, not in the Defender portal."
+                "description": "None (default): no incident. AlertBacked: a scheduled analytics rule raises an alert and an incident that shows in the Microsoft Defender portal. Direct: the function creates the incident through the Microsoft Sentinel API; it shows only in the Azure portal and the API, not in the Defender portal."
             }
         },
         "EnableLogPlaintextPassword": {

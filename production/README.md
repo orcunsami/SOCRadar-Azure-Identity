@@ -67,7 +67,7 @@ step, `precheck-workspace-exists`, and creates nothing. It used to create the
 storage account, the App Service Plan, Application Insights and the identity
 before failing.
 
-A second step, `precheck-sentinel-onboarded`, checks that Microsoft Sentinel is onboarded on that workspace. The analytics rules deploy in every mode, so it always runs, and a workspace without Microsoft Sentinel stops the deployment before anything is created.
+A second step, `precheck-sentinel-onboarded`, checks that Microsoft Sentinel is onboarded on that workspace. The analytics rule deploys in every mode, so it always runs, and a workspace without Microsoft Sentinel stops the deployment before anything is created.
 
 ### A failed Failure-Anomalies deployment is Azure's, not ours
 
