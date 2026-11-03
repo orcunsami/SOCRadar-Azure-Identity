@@ -45,6 +45,9 @@ jobs:
       - name: Both prechecks resolve the workspace before anything is created
         run: python3 production/tests/test_workspace_guard.py
 
+      - name: IncidentMode turns the alert rule on only in AlertBacked and never reads a credential column
+        run: python3 production/tests/test_incident_mode.py
+
       - name: Deployment script messages go to stderr
         run: python3 production/tests/test_script_messages.py
 

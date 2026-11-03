@@ -32,16 +32,32 @@ parameters: the template reads both from the workspace you name.
 | EnablePasswordChange | false | Force a password change at next sign-in |
 | EnableDisableAccount | false | Disable the account. Use with caution |
 | EnableConfirmRisky | false | Confirm the user as compromised in Identity Protection (Entra ID P1/P2) |
-| EnableCreateIncident | false | Create Microsoft Sentinel incidents for matched users. Needs Microsoft Sentinel on the workspace and a Sentinel role for the App Registration, see below |
+| IncidentMode | None | `None`: no incident. `AlertBacked`: a scheduled analytics rule raises the alert and the incident, which the Microsoft Defender portal shows. `Direct`: the function creates the incident through the Microsoft Sentinel API, which the Defender portal does not show. See "Incidents" |
+| EnableCreateIncident | false | Deprecated, use `IncidentMode`. With `IncidentMode` `None`, `true` means `Direct` |
 | EnableLogPlaintextPassword | false | Write the password to Log Analytics when the API returns it unmasked. The API reference describes the value as masked |
 | PollingIntervalHours | 6 | 1, 2, 3, 4, 6, 8, 12 or 24 |
 | InitialLookbackMinutes | 600 | History to fetch on the first run |
 | PackageUri | v1.0.0 release | Function package, see "How the code gets there" |
 
-`EnableCreateIncident` signs in with the App Registration (not the managed identity). Give it
-**Microsoft Sentinel Responder** (or Contributor) on the workspace. Without that role the
-deployment is green and every incident call answers 403: the audit row counts it under
-`error_count` and nothing else changes.
+### Incidents
+
+Microsoft Sentinel in the Azure portal is supported until 31 March 2027; after that it is available only in the Microsoft Defender portal. Per Microsoft documentation, incidents created through the Microsoft Sentinel API are not synchronized to the Defender portal. Incidents raised by an analytics rule are.
+
+| `IncidentMode` | What happens | Where the incident shows |
+|---|---|---|
+| `None` (default) | No incident. | - |
+| `AlertBacked` | The rule `SOCRadar Identity - Leaked credential` raises one alert and one incident for every row in `SOCRadar_Identity_CL`. | Azure portal and Defender portal |
+| `Direct` | The function creates the incident with `PUT` through the Microsoft Sentinel API, with the App Registration (not the managed identity). Give it **Microsoft Sentinel Responder** (or Contributor) on the workspace. Without that role the deployment is green and every incident call answers 403: the audit row counts it under `error_count`. | Azure portal and API only |
+
+`AlertBacked` needs no Microsoft Sentinel role for the function. The rule runs every hour over the last 7 days (Sentinel does not accept a window of 2 days or more with a shorter frequency) and ignores a row until it is 12 minutes old, so an incident appears up to about 80 minutes after the function wrote the row (measured on one run: 58 and 73 minutes). The account is the Account entity; the monitored domain, the login URL, the country, the Entra ID lookup result and the actions taken are Custom Details. The rule never reads a credential column. The labels are the ones `Direct` sets: `SOCRadar`, `IDENTITY` and `LeakedCredential`. The title and the description are not the `Direct` text: the title carries the monitored domain, and the description names the account, the domain and the Entra ID lookup result.
+
+Severity follows `Direct`, which sent the function's severity capitalized, and the function marks every matched account `MEDIUM`: the incident is Medium. A row with no severity (an account that Entra ID did not match, which `Direct` never raised an incident for) is Medium too. `CRITICAL`, which the function does not produce, would be High, because Sentinel has no Critical.
+
+Every row alerts, whether the Entra ID lookup found the account or not (`Direct` only created an incident for a matched account). Each row is alerted once within the rule's 7-day window: its key is `identity|record_id|email|url`, kept as the `DedupKey` Custom Detail on the alert, and the rule drops a row whose key already has an alert. The rule can only see alerts inside its window (`queryPeriod` P7D), so a row written again more than 7 days after its alert alerts again. A closed incident is not reopened inside the window.
+
+The rule and the labeling automation rule are deployed in every mode and are turned on only in `AlertBacked`, so a redeploy with another mode turns them off instead of leaving them on. Because they are always deployed, Microsoft Sentinel has to be enabled on the workspace in every mode (see below).
+
+The table `SOCRadar_Identity_CL` is created by the first write (HTTP Data Collector API), with suffixed column names such as `email_s`, `record_id_s`, `entra_status_s`, `severity_s`, `actions_taken_s` and `log_date_t`. The rule reads them with `column_ifexists`, so it deploys before the table exists.
 
 ### The workspace has to exist before you deploy
 
@@ -51,9 +67,7 @@ step, `precheck-workspace-exists`, and creates nothing. It used to create the
 storage account, the App Service Plan, Application Insights and the identity
 before failing.
 
-With `EnableCreateIncident` on, a second step checks that Microsoft Sentinel is
-actually onboarded on that workspace. Without that check the deployment went
-green and incident creation failed later, at runtime.
+A second step, `precheck-sentinel-onboarded`, checks that Microsoft Sentinel is onboarded on that workspace. The analytics rules deploy in every mode, so it always runs, and a workspace without Microsoft Sentinel stops the deployment before anything is created.
 
 ### A failed Failure-Anomalies deployment is Azure's, not ours
 

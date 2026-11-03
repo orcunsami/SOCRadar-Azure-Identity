@@ -98,7 +98,19 @@
             "type": "bool",
             "defaultValue": false,
             "metadata": {
-                "description": "Create Microsoft Sentinel incidents for compromised accounts"
+                "description": "Deprecated, use IncidentMode. With IncidentMode None, true means Direct."
+            }
+        },
+        "IncidentMode": {
+            "type": "string",
+            "defaultValue": "None",
+            "allowedValues": [
+                "None",
+                "AlertBacked",
+                "Direct"
+            ],
+            "metadata": {
+                "description": "None (default): no incident. AlertBacked: scheduled analytics rules raise an alert and an incident that shows in the Microsoft Defender portal. Direct: the function creates the incident through the Microsoft Sentinel API; it shows only in the Azure portal and the API, not in the Defender portal."
             }
         },
         "EnableLogPlaintextPassword": {
@@ -157,7 +169,9 @@
         "StorageTableDataContributorRoleId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
         "WebsiteContributorRoleId": "de139f84-1756-47ae-9be6-808fbbe84772",
         "workspaceResourceId": "[resourceId(subscription().subscriptionId, if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup')), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
-        "pollingSchedule": "[concat('0 0 */', string(parameters('PollingIntervalHours')), ' * * *')]"
+        "pollingSchedule": "[concat('0 0 */', string(parameters('PollingIntervalHours')), ' * * *')]",
+        "effectiveIncidentMode": "[if(and(equals(parameters('IncidentMode'), 'None'), parameters('EnableCreateIncident')), 'Direct', parameters('IncidentMode'))]",
+        "workspaceRg": "[if(empty(parameters('WorkspaceResourceGroup')), resourceGroup().name, parameters('WorkspaceResourceGroup'))]"
     },
     "resources": [
         {
@@ -196,7 +210,6 @@
             "type": "Microsoft.Resources/deployments",
             "apiVersion": "2021-04-01",
             "name": "precheck-sentinel-onboarded",
-            "condition": "[parameters('EnableCreateIncident')]",
             "properties": {
                 "mode": "Incremental",
                 "expressionEvaluationOptions": {
@@ -222,6 +235,167 @@
                             "value": "[reference(concat(parameters('WorkspaceResourceId'), '/providers/Microsoft.SecurityInsights/onboardingStates/default'), '2023-02-01', 'Full').id]"
                         }
                     }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "socradar-identity-alert-rules",
+            "resourceGroup": "[variables('workspaceRg')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-workspace-exists')]",
+                "[resourceId('Microsoft.Resources/deployments', 'precheck-sentinel-onboarded')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "inner"
+                },
+                "parameters": {
+                    "WorkspaceName": {
+                        "value": "[parameters('WorkspaceName')]"
+                    },
+                    "RuleEnabled": {
+                        "value": "[equals(variables('effectiveIncidentMode'), 'AlertBacked')]"
+                    }
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "WorkspaceName": {
+                            "type": "string"
+                        },
+                        "RuleEnabled": {
+                            "type": "bool"
+                        }
+                    },
+                    "variables": {
+                        "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+                        "ruleId": "[guid(variables('workspaceResourceId'), 'socradar-identity-rule-leaked-credential')]",
+                        "automationRuleId": "[guid(variables('workspaceResourceId'), 'socradar-identity-automation-label')]"
+                    },
+                    "resources": [
+                        {
+                            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+                            "apiVersion": "2024-03-01",
+                            "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('ruleId'))]",
+                            "kind": "Scheduled",
+                            "properties": {
+                                "displayName": "SOCRadar Identity - Leaked credential",
+                                "description": "Raises one alert, and one incident, for every leaked credential row that SOCRadar Identity Intelligence wrote to SOCRadar_Identity_CL. The account is the Account entity; the monitored domain, the login URL, the country and the Entra ID lookup result are Custom Details. A row that already has an alert is not alerted again.",
+                                "severity": "Medium",
+                                "enabled": "[parameters('RuleEnabled')]",
+                                "query": "// One alert per leaked credential row. The platform runs a rule about 6 minutes behind the clock, so an\n// alert is invisible to a run that follows too closely: runs are an hour apart (a window of 2 days or\n// more needs a frequency of at least 1 hour, measured) and a row is held back until it is 12 minutes\n// old, which also covers a run that follows a redeploy within minutes. Rows\n// that already have an alert are dropped, so a late run cannot alert twice and an incident closed by an\n// analyst is not followed by a second one. The rule runs over 7 days (queryPeriod applies to SecurityAlert too), so that holds within a 7-day window: a row written again after more than 7 days alerts again. Custom Details is a second, still-encoded JSON string with\n// 1-element arrays (live-measured). isfuzzy keeps the rule alive in a workspace where SecurityAlert or\n// the table does not exist yet (the table is created by the first write), and column_ifexists keeps it\n// alive while a column is missing.\nlet Alerted = union isfuzzy=true (datatable(ExtendedProperties:string)[]), SecurityAlert\n| extend AlertedKey = tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).DedupKey[0])\n| where isnotempty(AlertedKey)\n| distinct AlertedKey;\nunion isfuzzy=true (datatable(TimeGenerated:datetime)[]), SOCRadar_Identity_CL\n| where TimeGenerated > ago(7d)\n| where TimeGenerated < ago(12m)\n| extend Email = tostring(column_ifexists(\"email_s\", \"\")), RecordId = tostring(column_ifexists(\"record_id_s\", \"\")), LoginUrl = tostring(column_ifexists(\"url_s\", \"\"))\n| where isnotempty(Email)\n| extend DedupKey = strcat_delim(\"|\", \"identity\", RecordId, tolower(Email), LoginUrl)\n| join kind=leftanti Alerted on $left.DedupKey == $right.AlertedKey\n| summarize arg_max(TimeGenerated, *) by DedupKey\n| extend Domain = tostring(column_ifexists(\"monitored_domain_s\", \"\")), Country = tostring(column_ifexists(\"country_s\", \"\")), EntraStatus = tostring(column_ifexists(\"entra_status_s\", \"\")), ActionsTaken = tostring(column_ifexists(\"actions_taken_s\", \"\")), SocradarSeverity = tostring(column_ifexists(\"severity_s\", \"\"))\n// Direct sent severity.capitalize() and the function sets MEDIUM for every matched account. Sentinel has no Critical, so CRITICAL (not produced today) is High; a row with no severity (an account that was not matched) is Medium.\n| extend SentinelSeverity = case(toupper(SocradarSeverity) in (\"CRITICAL\", \"HIGH\"), \"High\", toupper(SocradarSeverity) == \"LOW\", \"Low\", toupper(SocradarSeverity) == \"INFORMATIONAL\", \"Informational\", \"Medium\")\n// Name is set only when the id is an address: an id without an @ has no domain part to split.\n| extend AccountName = iff(Email contains \"@\", tostring(split(Email, \"@\")[0]), Email), AccountUPNSuffix = iff(Email contains \"@\", tostring(split(Email, \"@\")[1]), \"\")\n| extend AccountLabel = Email\n| project TimeGenerated, DedupKey, RecordId, Email, AccountName, AccountUPNSuffix, AccountLabel, Domain, LoginUrl, Country, EntraStatus, ActionsTaken, SocradarSeverity, SentinelSeverity\n| order by TimeGenerated asc\n| take 149",
+                                "queryFrequency": "PT1H",
+                                "queryPeriod": "P7D",
+                                "triggerOperator": "GreaterThan",
+                                "triggerThreshold": 0,
+                                "suppressionDuration": "PT5M",
+                                "suppressionEnabled": false,
+                                "tactics": [
+                                    "CredentialAccess"
+                                ],
+                                "techniques": [
+                                    "T1552"
+                                ],
+                                "eventGroupingSettings": {
+                                    "aggregationKind": "AlertPerResult"
+                                },
+                                "alertDetailsOverride": {
+                                    "alertDisplayNameFormat": "SOCRadar: Leaked credential detected - {{Domain}}",
+                                    "alertDescriptionFormat": "SOCRadar Identity Intelligence found a leaked credential for {{AccountLabel}} on {{Domain}}. Entra ID lookup: {{EntraStatus}}.",
+                                    "alertSeverityColumnName": "SentinelSeverity"
+                                },
+                                "customDetails": {
+                                    "DedupKey": "DedupKey",
+                                    "RecordId": "RecordId",
+                                    "MonitoredDomain": "Domain",
+                                    "SocradarSeverity": "SocradarSeverity",
+                                    "EntraStatus": "EntraStatus",
+                                    "ActionsTaken": "ActionsTaken",
+                                    "LoginUrl": "LoginUrl",
+                                    "Country": "Country"
+                                },
+                                "entityMappings": [
+                                    {
+                                        "entityType": "Account",
+                                        "fieldMappings": [
+                                            {
+                                                "identifier": "Name",
+                                                "columnName": "AccountName"
+                                            },
+                                            {
+                                                "identifier": "UPNSuffix",
+                                                "columnName": "AccountUPNSuffix"
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "incidentConfiguration": {
+                                    "createIncident": true,
+                                    "groupingConfiguration": {
+                                        "enabled": false,
+                                        "reopenClosedIncident": false,
+                                        "lookbackDuration": "PT5H",
+                                        "matchingMethod": "AllEntities",
+                                        "groupByEntities": [],
+                                        "groupByAlertDetails": [],
+                                        "groupByCustomDetails": []
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+                            "apiVersion": "2024-03-01",
+                            "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('automationRuleId'))]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', variables('ruleId'))]"
+                            ],
+                            "properties": {
+                                "displayName": "SOCRadar Identity - label incidents created by the leaked credential rule",
+                                "order": 10,
+                                "triggeringLogic": {
+                                    "isEnabled": "[parameters('RuleEnabled')]",
+                                    "triggersOn": "Incidents",
+                                    "triggersWhen": "Created",
+                                    "conditions": [
+                                        {
+                                            "conditionType": "Property",
+                                            "conditionProperties": {
+                                                "propertyName": "IncidentRelatedAnalyticRuleIds",
+                                                "operator": "Contains",
+                                                "propertyValues": [
+                                                    "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', variables('ruleId'))]"
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                },
+                                "actions": [
+                                    {
+                                        "order": 1,
+                                        "actionType": "ModifyProperties",
+                                        "actionConfiguration": {
+                                            "labels": [
+                                                {
+                                                    "labelName": "SOCRadar"
+                                                },
+                                                {
+                                                    "labelName": "IDENTITY"
+                                                },
+                                                {
+                                                    "labelName": "LeakedCredential"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
                 }
             }
         },
@@ -415,7 +589,7 @@
                         },
                         {
                             "name": "ENABLE_CREATE_INCIDENT",
-                            "value": "[string(parameters('EnableCreateIncident'))]"
+                            "value": "[string(equals(variables('effectiveIncidentMode'), 'Direct'))]"
                         },
                         {
                             "name": "ENABLE_LOG_PLAINTEXT_PASSWORD",

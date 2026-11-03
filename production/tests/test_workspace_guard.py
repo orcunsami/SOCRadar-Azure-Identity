@@ -18,11 +18,13 @@ the workspace and that every resource waits on.
 Two guards, because there are two ways to be pointed at the wrong place:
 
   precheck-workspace-exists     unconditional; the workspace must resolve
-  precheck-sentinel-onboarded   only when EnableCreateIncident is on
+  precheck-sentinel-onboarded   unconditional since IncidentMode; the analytics
+                                rules deploy in every mode (a conditional rules
+                                module would leave them on after a switch)
 
-The second one exists because the Function App writes to
-Microsoft.SecurityInsights/incidents. Without Microsoft Sentinel on the
-workspace that call fails at runtime, hours after a green deployment
+The second one exists because the rules and the Direct mode write to
+Microsoft.SecurityInsights. Without Microsoft Sentinel on the workspace those
+fail, and Direct fails at runtime hours after a green deployment
 (EXP-AZURE-0200). This template never onboards Microsoft Sentinel itself.
 
 The third thing checked here is the workspace resource id. resourceId() with
@@ -60,7 +62,7 @@ by_name = {r.get("name"): r for r in resources}
 
 # --- the guards exist and are shaped so they can actually fail -------------
 
-for name, condition in ((GUARD, None), (ONBOARD, "[parameters('EnableCreateIncident')]")):
+for name, condition in ((GUARD, None), (ONBOARD, None)):
     res = by_name.get(name)
     check(res is not None,
           "azuredeploy.json: %s is gone - a wrong workspace would half-install again" % name)
